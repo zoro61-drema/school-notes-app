@@ -57,8 +57,14 @@
 
           <section class="editor-card">
             <div class="editor-toolbar">
+              <div class="mode-switch">
+                <button id="write-mode-btn" class="mode-btn active" disabled>Write</button>
+                <button id="draw-mode-btn" class="mode-btn" disabled>Draw</button>
+              </div>
+
               <button id="rename-note-btn" class="ghost-btn" disabled>Rename Note</button>
               <button id="delete-note-btn" class="danger-btn" disabled>Delete Note</button>
+              <button id="clear-canvas-btn" class="ghost-btn" disabled>Clear Drawing</button>
             </div>
 
             <input
@@ -68,21 +74,15 @@
               disabled
             />
 
-            <textarea
-              id="note-content"
-              placeholder="Start typing your notes here..."
-              disabled
-            ></textarea>
+            <div id="text-editor-view" class="editor-view active">
+              <textarea
+                id="note-content"
+                placeholder="Start typing your notes here..."
+                disabled
+              ></textarea>
+            </div>
 
-            <div class="drawing-section">
-              <div class="drawing-header">
-                <h3>Drawing Pad</h3>
-                <div class="drawing-actions">
-                  <button id="clear-canvas-btn" class="ghost-btn" disabled>Clear Drawing</button>
-                  <button id="save-drawing-btn" class="primary-btn" disabled>Save Drawing</button>
-                </div>
-              </div>
-
+            <div id="drawing-editor-view" class="editor-view">
               <div class="canvas-wrap">
                 <canvas id="drawing-canvas"></canvas>
               </div>
