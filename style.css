@@ -109,7 +109,9 @@ body {
 .notes-list-header,
 .editor-toolbar,
 .actions-row,
-.editor-footer {
+.editor-footer,
+.drawing-header,
+.drawing-actions {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -122,7 +124,8 @@ body {
 }
 
 .panel-header h2,
-.notes-list-header h3 {
+.notes-list-header h3,
+.drawing-header h3 {
   margin: 0;
 }
 
@@ -205,15 +208,46 @@ textarea:focus {
 }
 
 #note-content {
-  min-height: 55vh;
+  min-height: 32vh;
   resize: vertical;
   line-height: 1.5;
+  margin-bottom: 16px;
 }
 
 .editor-toolbar {
   justify-content: flex-end;
   margin-bottom: 12px;
   flex-wrap: wrap;
+}
+
+.drawing-section {
+  margin-top: 8px;
+}
+
+.drawing-header {
+  justify-content: space-between;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.drawing-actions {
+  flex-wrap: wrap;
+}
+
+.canvas-wrap {
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 10px;
+}
+
+#drawing-canvas {
+  width: 100%;
+  height: 320px;
+  display: block;
+  background: white;
+  border-radius: 12px;
+  touch-action: none;
 }
 
 .editor-footer {
@@ -274,7 +308,7 @@ button:disabled {
   }
 
   #note-content {
-    min-height: 40vh;
+    min-height: 26vh;
   }
 }
 
@@ -303,21 +337,27 @@ button:disabled {
   }
 
   .actions-row,
-  .editor-toolbar {
+  .editor-toolbar,
+  .drawing-actions {
     width: 100%;
   }
 
   .actions-row button,
-  .editor-toolbar button {
+  .editor-toolbar button,
+  .drawing-actions button {
     flex: 1 1 100%;
   }
 
   #note-content {
-    min-height: 34vh;
+    min-height: 24vh;
     font-size: 16px;
   }
 
   input {
     font-size: 16px;
+  }
+
+  #drawing-canvas {
+    height: 260px;
   }
 }

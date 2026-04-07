@@ -12,6 +12,14 @@ const noteTitleInput = document.getElementById("note-title");
 const noteContentInput = document.getElementById("note-content");
 const toggleThemeBtn = document.getElementById("toggle-theme");
 const saveStatusEl = document.getElementById("save-status");
+const clearCanvasBtn = document.getElementById("clear-canvas-btn");
+const saveDrawingBtn = document.getElementById("save-drawing-btn");
+const canvas = document.getElementById("drawing-canvas");
+const ctx = canvas.getContext("2d");
+
+let isDrawing = false;
+let lastX = 0;
+let lastY = 0;
 
 let appData = JSON.parse(localStorage.getItem("schoolNotesApp")) || {
   classes: [],
@@ -40,12 +48,22 @@ function getSelectedNote() {
 }
 
 function formatDate(timestamp) {
+  if (!timestamp) return "Just now";
   return new Date(timestamp).toLocaleString([], {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit"
   });
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function renderClasses() {
@@ -98,8 +116,11 @@ function renderNotes() {
     noteContentInput.disabled = true;
     renameNoteBtn.disabled = true;
     deleteNoteBtn.disabled = true;
+    clearCanvasBtn.disabled = true;
+    saveDrawingBtn.disabled = true;
     noteTitleInput.value = "";
     noteContentInput.value = "";
+    clearCanvas();
     return;
   }
 
@@ -139,19 +160,24 @@ function renderNotes() {
 
   renameNoteBtn.disabled = !hasNote;
   deleteNoteBtn.disabled = !hasNote;
+  clearCanvasBtn.disabled = !hasNote;
+  saveDrawingBtn.disabled = !hasNote;
 
   if (!selectedNote) {
     noteTitleInput.disabled = true;
     noteContentInput.disabled = true;
     noteTitleInput.value = "";
     noteContentInput.value = "";
+    clearCanvas();
     return;
   }
 
   noteTitleInput.disabled = false;
   noteContentInput.disabled = false;
-  noteTitleInput.value = selectedNote.title;
-  noteContentInput.value = selectedNote.content;
+  noteTitleInput.value = selectedNote.title || "";
+  noteContentInput.value = selectedNote.content || "";
+
+  loadDrawingForSelectedNote();
 }
 
 function renderTheme() {
@@ -161,17 +187,98 @@ function renderTheme() {
 
 function render() {
   renderTheme();
+  resizeCanvas();
   renderClasses();
   renderNotes();
 }
 
-function escapeHtml(value) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+
+  const existingImage = canvas.toDataURL();
+
+  canvas.width = Math.floor(rect.width * dpr);
+  canvas.height = Math.floor(rect.height * dpr);
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "#111827";
+
+  const img = new Image();
+  img.onload = () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, rect.width, rect.height);
+  };
+  img.src = existingImage;
+}
+
+function clearCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, rect.width, rect.height);
+}
+
+function getCanvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top
+  };
+}
+
+function startDrawing(event) {
+  const selectedNote = getSelectedNote();
+  if (!selectedNote) return;
+
+  isDrawing = true;
+  const point = getCanvasPoint(event);
+  lastX = point.x;
+  lastY = point.y;
+}
+
+function draw(event) {
+  if (!isDrawing) return;
+  const point = getCanvasPoint(event);
+
+  ctx.beginPath();
+  ctx.moveTo(lastX, lastY);
+  ctx.lineTo(point.x, point.y);
+  ctx.stroke();
+
+  lastX = point.x;
+  lastY = point.y;
+}
+
+function stopDrawing() {
+  if (!isDrawing) return;
+  isDrawing = false;
+}
+
+function saveDrawingToSelectedNote() {
+  const selectedNote = getSelectedNote();
+  if (!selectedNote) return;
+
+  selectedNote.drawing = canvas.toDataURL("image/png");
+  selectedNote.updatedAt = Date.now();
+  saveApp();
+  renderNotes();
+}
+
+function loadDrawingForSelectedNote() {
+  clearCanvas();
+  const selectedNote = getSelectedNote();
+  if (!selectedNote || !selectedNote.drawing) return;
+
+  const img = new Image();
+  img.onload = () => {
+    const rect = canvas.getBoundingClientRect();
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.drawImage(img, 0, 0, rect.width, rect.height);
+  };
+  img.src = selectedNote.drawing;
 }
 
 addClassBtn.addEventListener("click", () => {
@@ -228,6 +335,7 @@ addNoteBtn.addEventListener("click", () => {
     id: generateId(),
     title: "New Note",
     content: "",
+    drawing: null,
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -297,6 +405,44 @@ toggleThemeBtn.addEventListener("click", () => {
   appData.darkMode = !appData.darkMode;
   saveApp();
   renderTheme();
+});
+
+clearCanvasBtn.addEventListener("click", () => {
+  const selectedNote = getSelectedNote();
+  if (!selectedNote) return;
+
+  const confirmed = confirm("Clear this drawing?");
+  if (!confirmed) return;
+
+  clearCanvas();
+  selectedNote.drawing = null;
+  selectedNote.updatedAt = Date.now();
+  saveApp();
+  renderNotes();
+});
+
+saveDrawingBtn.addEventListener("click", () => {
+  saveStatusEl.textContent = "Saving drawing...";
+  saveDrawingToSelectedNote();
+});
+
+canvas.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  startDrawing(event);
+});
+
+canvas.addEventListener("pointermove", (event) => {
+  event.preventDefault();
+  draw(event);
+});
+
+canvas.addEventListener("pointerup", stopDrawing);
+canvas.addEventListener("pointerleave", stopDrawing);
+canvas.addEventListener("pointercancel", stopDrawing);
+
+window.addEventListener("resize", () => {
+  resizeCanvas();
+  loadDrawingForSelectedNote();
 });
 
 render();
