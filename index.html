@@ -57,13 +57,11 @@
 
           <section class="editor-card">
             <div class="editor-toolbar">
-              <div class="mode-switch">
-                <button id="write-mode-btn" class="mode-btn active" disabled>Write</button>
-                <button id="draw-mode-btn" class="mode-btn" disabled>Draw</button>
+              <div class="editor-toolbar-left">
+                <button id="rename-note-btn" class="ghost-btn" disabled>Rename Note</button>
+                <button id="delete-note-btn" class="danger-btn" disabled>Delete Note</button>
               </div>
 
-              <button id="rename-note-btn" class="ghost-btn" disabled>Rename Note</button>
-              <button id="delete-note-btn" class="danger-btn" disabled>Delete Note</button>
               <button id="clear-canvas-btn" class="ghost-btn" disabled>Clear Drawing</button>
             </div>
 
@@ -74,19 +72,22 @@
               disabled
             />
 
-            <div id="text-editor-view" class="editor-view active">
-              <textarea
-                id="note-content"
-                placeholder="Start typing your notes here..."
-                disabled
-              ></textarea>
-            </div>
+            <textarea
+              id="note-content"
+              placeholder="Start typing your notes here..."
+              disabled
+            ></textarea>
 
-            <div id="drawing-editor-view" class="editor-view">
+            <section class="drawing-section">
+              <div class="drawing-section-header">
+                <h3>Drawing</h3>
+                <span class="subtext">Draw in the same note</span>
+              </div>
+
               <div class="canvas-wrap">
                 <canvas id="drawing-canvas"></canvas>
               </div>
-            </div>
+            </section>
 
             <div class="editor-footer">
               <span id="save-status">Saved locally on this device</span>
