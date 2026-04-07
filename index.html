@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>School Notes</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>School Notes</h1>
+      <button id="toggle-theme">Toggle Dark Mode</button>
+    </header>
+
+    <main class="layout">
+      <section class="sidebar">
+        <div class="section-header">
+          <h2>Classes</h2>
+          <button id="add-class-btn">+ Class</button>
+        </div>
+        <ul id="class-list"></ul>
+      </section>
+
+      <section class="content">
+        <div class="section-header">
+          <h2 id="current-class-title">Select a class</h2>
+          <button id="add-note-btn" disabled>+ Note</button>
+        </div>
+
+        <div class="notes-area">
+          <aside class="notes-list-panel">
+            <h3>Notes</h3>
+            <ul id="note-list"></ul>
+          </aside>
+
+          <section class="editor-panel">
+            <input
+              id="note-title"
+              type="text"
+              placeholder="Note title"
+              disabled
+            />
+            <textarea
+              id="note-content"
+              placeholder="Start typing your notes here..."
+              disabled
+            ></textarea>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
