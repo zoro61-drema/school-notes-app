@@ -1,44 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import FullscreenDrawingModal from "./components/FullscreenDrawingModal";
+import { isSupabaseConfigured, supabase } from "./lib/supabase";
 
-const STORAGE_KEY = "schoolNotesApp";
+const EMPTY_SAVE_STATE = {
+  state: "idle",
+  lastSavedAt: null,
+  error: "",
+};
 
-function generateId() {
-  return Date.now().toString() + Math.random().toString(16).slice(2);
+function createId() {
+  return crypto.randomUUID();
 }
 
-function loadAppData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return {
-        classes: [],
-        selectedClassId: null,
-        selectedNoteId: null,
-        darkMode: false,
-      };
-    }
+function formatTimestamp(value) {
+  if (!value) return "Just now";
 
-    const parsed = JSON.parse(raw);
-
-    return {
-      classes: Array.isArray(parsed.classes) ? parsed.classes : [],
-      selectedClassId: parsed.selectedClassId || null,
-      selectedNoteId: parsed.selectedNoteId || null,
-      darkMode: Boolean(parsed.darkMode),
-    };
-  } catch {
-    return {
-      classes: [],
-      selectedClassId: null,
-      selectedNoteId: null,
-      darkMode: false,
-    };
-  }
-}
-
-function formatDate(timestamp) {
-  if (!timestamp) return "Just now";
-  return new Date(timestamp).toLocaleString([], {
+  return new Date(value).toLocaleString([], {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -46,591 +30,826 @@ function formatDate(timestamp) {
   });
 }
 
-function ensureValidSelection(data) {
-  const next = structuredClone(data);
+function getSortOrder() {
+  return Math.floor(Date.now() / 1000);
+}
 
-  if (!next.classes.length) {
-    next.selectedClassId = null;
-    next.selectedNoteId = null;
-    return next;
+function sortClasses(list) {
+  return [...list].sort((left, right) => {
+    if (right.sort_order !== left.sort_order) {
+      return right.sort_order - left.sort_order;
+    }
+
+    return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+  });
+}
+
+function sortNotes(list) {
+  return [...list].sort((left, right) => {
+    if (right.sort_order !== left.sort_order) {
+      return right.sort_order - left.sort_order;
+    }
+
+    return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
+  });
+}
+
+function ensureValidSelection(classes, notes, selectedClassId, selectedNoteId) {
+  if (!classes.length) {
+    return {
+      selectedClassId: null,
+      selectedNoteId: null,
+    };
   }
 
-  let selectedClass =
-    next.classes.find((c) => c.id === next.selectedClassId) || null;
+  const nextClassId = classes.some((item) => item.id === selectedClassId)
+    ? selectedClassId
+    : classes[0].id;
 
-  if (!selectedClass) {
-    next.selectedClassId = next.classes[0].id;
-    selectedClass = next.classes[0];
+  const classNotes = notes.filter((note) => note.class_id === nextClassId);
+  const nextNoteId = classNotes.some((item) => item.id === selectedNoteId)
+    ? selectedNoteId
+    : classNotes[0]?.id || null;
+
+  return {
+    selectedClassId: nextClassId,
+    selectedNoteId: nextNoteId,
+  };
+}
+
+function getSaveLabel(saveState) {
+  if (!saveState || saveState.state === "idle") {
+    return "Saved";
   }
 
-  if (!selectedClass.notes.length) {
-    next.selectedNoteId = null;
-    return next;
+  if (saveState.state === "saving") {
+    return "Saving...";
   }
 
-  const selectedNote =
-    selectedClass.notes.find((n) => n.id === next.selectedNoteId) || null;
-
-  if (!selectedNote) {
-    next.selectedNoteId = selectedClass.notes[0].id;
+  if (saveState.state === "error") {
+    return saveState.error || "Error saving";
   }
 
-  return next;
+  if (!saveState.lastSavedAt) {
+    return "Saved";
+  }
+
+  return `Last saved ${new Date(saveState.lastSavedAt).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
 }
 
 export default function App() {
-  const [appData, setAppData] = useState(() =>
-    ensureValidSelection(loadAppData())
+  const [classes, setClasses] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [selectedClassId, setSelectedClassId] = useState(null);
+  const [selectedNoteId, setSelectedNoteId] = useState(null);
+  const [darkMode, setDarkMode] = useState(false);
+  const [isLoading, setIsLoading] = useState(isSupabaseConfigured);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(
+    isSupabaseConfigured ? "" : "Add your Supabase URL and anon key in .env before using sync."
   );
-  const [saveStatus, setSaveStatus] = useState("Saved locally on this device");
+  const [isClassBusy, setIsClassBusy] = useState(false);
+  const [isNoteBusy, setIsNoteBusy] = useState(false);
+  const [drawingOpen, setDrawingOpen] = useState(false);
+  const [noteSaveStates, setNoteSaveStates] = useState({});
 
-  const canvasRef = useRef(null);
-  const drawingRef = useRef(false);
-  const lastPointRef = useRef({ x: 0, y: 0 });
+  const textSaveTimeoutRef = useRef(null);
   const drawingSaveTimeoutRef = useRef(null);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-  }, [appData]);
-
-  useEffect(() => {
-    document.body.classList.toggle("dark", appData.darkMode);
-  }, [appData.darkMode]);
-
-  useEffect(() => {
-    const onStorage = (event) => {
-      if (event.key !== STORAGE_KEY) return;
-      setAppData(ensureValidSelection(loadAppData()));
-      setSaveStatus("Updated from another tab");
-    };
-
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-
-  const selectedClass = useMemo(
-    () => appData.classes.find((c) => c.id === appData.selectedClassId) || null,
-    [appData]
+  const classesById = useMemo(
+    () => new Map(classes.map((item) => [item.id, item])),
+    [classes]
   );
 
-  const selectedNote = useMemo(() => {
-    if (!selectedClass) return null;
-    return (
-      selectedClass.notes.find((n) => n.id === appData.selectedNoteId) || null
-    );
-  }, [selectedClass, appData.selectedNoteId]);
+  const notesByClassId = useMemo(() => {
+    const nextMap = new Map();
 
-  useEffect(() => {
-    resizeCanvas();
-    loadDrawingForSelectedNote();
-  }, [selectedNote]);
+    for (const note of notes) {
+      if (!nextMap.has(note.class_id)) {
+        nextMap.set(note.class_id, []);
+      }
 
-  useEffect(() => {
-    const onResize = () => {
-      resizeCanvas();
-      loadDrawingForSelectedNote();
-    };
-
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  });
-
-  function saveMessage(message) {
-    setSaveStatus(message);
-  }
-
-  function updateApp(updater, message = "Saved locally on this device") {
-    setAppData((prev) => ensureValidSelection(updater(prev)));
-    setSaveStatus(message);
-  }
-
-  function resizeCanvas() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = canvas.getContext("2d");
-
-    canvas.width = Math.floor(rect.width * dpr);
-    canvas.height = Math.floor(rect.height * dpr);
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.scale(dpr, dpr);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "#111827";
-
-    clearCanvas();
-  }
-
-  function clearCanvas() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    const rect = canvas.getBoundingClientRect();
-
-    ctx.clearRect(0, 0, rect.width, rect.height);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, rect.width, rect.height);
-  }
-
-  function loadDrawingForSelectedNote() {
-    clearCanvas();
-
-    if (!selectedNote || !selectedNote.drawing) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    const rect = canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-
-    const img = new Image();
-    img.onload = () => {
-      clearCanvas();
-      ctx.drawImage(img, 0, 0, rect.width, rect.height);
-    };
-    img.src = selectedNote.drawing;
-  }
-
-  function getCanvasPoint(event) {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-
-    return {
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-    };
-  }
-
-  function autoSaveDrawing() {
-    clearTimeout(drawingSaveTimeoutRef.current);
-
-    drawingSaveTimeoutRef.current = setTimeout(() => {
-      const canvas = canvasRef.current;
-      if (!canvas || !selectedNote) return;
-
-      const drawing = canvas.toDataURL("image/png");
-
-      updateApp((prev) => {
-        const next = structuredClone(prev);
-        const cls = next.classes.find((c) => c.id === next.selectedClassId);
-        if (!cls) return next;
-
-        const note = cls.notes.find((n) => n.id === next.selectedNoteId);
-        if (!note) return next;
-
-        note.drawing = drawing;
-        note.updatedAt = Date.now();
-        return next;
-      }, "Drawing saved");
-    }, 250);
-  }
-
-  function handlePointerDown(event) {
-    if (!selectedNote) return;
-
-    const canvas = canvasRef.current;
-    canvas.setPointerCapture(event.pointerId);
-
-    drawingRef.current = true;
-    const point = getCanvasPoint(event);
-    lastPointRef.current = point;
-    saveMessage("Drawing...");
-  }
-
-  function handlePointerMove(event) {
-    if (!drawingRef.current) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    const point = getCanvasPoint(event);
-    const lastPoint = lastPointRef.current;
-
-    ctx.beginPath();
-    ctx.moveTo(lastPoint.x, lastPoint.y);
-    ctx.lineTo(point.x, point.y);
-    ctx.stroke();
-
-    lastPointRef.current = point;
-    autoSaveDrawing();
-  }
-
-  function handlePointerUp(event) {
-    if (!drawingRef.current) return;
-
-    try {
-      canvasRef.current.releasePointerCapture(event.pointerId);
-    } catch {
+      nextMap.get(note.class_id).push(note);
     }
 
-    drawingRef.current = false;
-    autoSaveDrawing();
+    for (const [key, value] of nextMap.entries()) {
+      nextMap.set(key, sortNotes(value));
+    }
+
+    return nextMap;
+  }, [notes]);
+
+  const selectedClass = selectedClassId ? classesById.get(selectedClassId) || null : null;
+  const selectedClassNotes = selectedClassId ? notesByClassId.get(selectedClassId) || [] : [];
+  const selectedNote = selectedNoteId
+    ? notes.find((item) => item.id === selectedNoteId) || null
+    : null;
+
+  const selectedNoteSaveState = selectedNoteId
+    ? noteSaveStates[selectedNoteId] || EMPTY_SAVE_STATE
+    : EMPTY_SAVE_STATE;
+
+  const loadData = useEffectEvent(async (options = {}) => {
+    const { silent = false } = options;
+
+    if (!silent) {
+      setIsLoading(true);
+    } else {
+      setIsRefreshing(true);
+    }
+
+    setLoadError("");
+
+    const [classesResponse, notesResponse] = await Promise.all([
+      supabase
+        .from("classes")
+        .select("*")
+        .order("sort_order", { ascending: false })
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("notes")
+        .select("*")
+        .order("sort_order", { ascending: false })
+        .order("updated_at", { ascending: false }),
+    ]);
+
+    if (classesResponse.error || notesResponse.error) {
+      setLoadError(classesResponse.error?.message || notesResponse.error?.message || "Unable to load data.");
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+
+    const nextClasses = sortClasses(classesResponse.data || []);
+    const nextNotes = sortNotes(notesResponse.data || []);
+    const nextSelection = ensureValidSelection(
+      nextClasses,
+      nextNotes,
+      selectedClassId,
+      selectedNoteId
+    );
+
+    setClasses(nextClasses);
+    setNotes(nextNotes);
+    setSelectedClassId(nextSelection.selectedClassId);
+    setSelectedNoteId(nextSelection.selectedNoteId);
+    setIsLoading(false);
+    setIsRefreshing(false);
+  });
+
+  useEffect(() => {
+    document.body.classList.toggle("dark", darkMode);
+  }, [darkMode]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    loadData();
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return undefined;
+
+    const onFocus = () => {
+      loadData({ silent: true });
+    };
+
+    const refreshInterval = window.setInterval(() => {
+      loadData({ silent: true });
+    }, 30000);
+
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(refreshInterval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [selectedClassId, selectedNoteId]);
+
+  useEffect(() => {
+    return () => {
+      window.clearTimeout(textSaveTimeoutRef.current);
+      window.clearTimeout(drawingSaveTimeoutRef.current);
+    };
+  }, []);
+
+  function updateSelection(nextClasses, nextNotes, overrides = {}) {
+    const nextSelection = ensureValidSelection(
+      nextClasses,
+      nextNotes,
+      overrides.selectedClassId ?? selectedClassId,
+      overrides.selectedNoteId ?? selectedNoteId
+    );
+
+    setSelectedClassId(nextSelection.selectedClassId);
+    setSelectedNoteId(nextSelection.selectedNoteId);
   }
 
-  function addClass() {
+  function updateNoteLocally(noteId, patch) {
+    setNotes((currentNotes) =>
+      sortNotes(
+        currentNotes.map((note) =>
+          note.id === noteId
+            ? {
+                ...note,
+                ...patch,
+                updated_at: patch.updated_at || new Date().toISOString(),
+              }
+            : note
+        )
+      )
+    );
+  }
+
+  function markNoteSaving(noteId) {
+    setNoteSaveStates((current) => ({
+      ...current,
+      [noteId]: {
+        ...(current[noteId] || EMPTY_SAVE_STATE),
+        state: "saving",
+        error: "",
+      },
+    }));
+  }
+
+  function markNoteSaved(noteId, lastSavedAt) {
+    setNoteSaveStates((current) => ({
+      ...current,
+      [noteId]: {
+        state: "saved",
+        lastSavedAt,
+        error: "",
+      },
+    }));
+  }
+
+  function markNoteError(noteId, error) {
+    setNoteSaveStates((current) => ({
+      ...current,
+      [noteId]: {
+        ...(current[noteId] || EMPTY_SAVE_STATE),
+        state: "error",
+        error,
+      },
+    }));
+  }
+
+  async function persistNotePatch(noteId, patch) {
+    markNoteSaving(noteId);
+
+    const response = await supabase
+      .from("notes")
+      .update(patch)
+      .eq("id", noteId)
+      .select("*")
+      .single();
+
+    if (response.error) {
+      markNoteError(noteId, "Error saving");
+      return;
+    }
+
+    setNotes((currentNotes) =>
+      sortNotes(currentNotes.map((item) => (item.id === noteId ? response.data : item)))
+    );
+    markNoteSaved(noteId, response.data.updated_at);
+  }
+
+  function queueTextSave(noteId, nextTitle, nextContent) {
+    window.clearTimeout(textSaveTimeoutRef.current);
+    markNoteSaving(noteId);
+
+    textSaveTimeoutRef.current = window.setTimeout(() => {
+      persistNotePatch(noteId, {
+        title: nextTitle.trim() || "Untitled Note",
+        content: nextContent,
+      });
+    }, 1400);
+  }
+
+  function queueDrawingSave(noteId, drawingValue) {
+    window.clearTimeout(drawingSaveTimeoutRef.current);
+    markNoteSaving(noteId);
+
+    drawingSaveTimeoutRef.current = window.setTimeout(() => {
+      persistNotePatch(noteId, {
+        drawing: drawingValue,
+      });
+    }, 6500);
+  }
+
+  async function addClass() {
     const name = prompt("Enter class name:");
     if (!name || !name.trim()) return;
 
-    updateApp((prev) => {
-      const next = structuredClone(prev);
-      const newClass = {
-        id: generateId(),
-        name: name.trim(),
-        notes: [],
-      };
+    setIsClassBusy(true);
+    const newClass = {
+      id: createId(),
+      name: name.trim(),
+      sort_order: getSortOrder(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
 
-      next.classes.unshift(newClass);
-      next.selectedClassId = newClass.id;
-      next.selectedNoteId = null;
-      return next;
-    });
+    const optimisticClasses = sortClasses([newClass, ...classes]);
+    setClasses(optimisticClasses);
+    setSelectedClassId(newClass.id);
+    setSelectedNoteId(null);
+
+    const response = await supabase.from("classes").insert(newClass).select("*").single();
+
+    if (response.error) {
+      setClasses(classes);
+      updateSelection(classes, notes);
+      setLoadError(response.error.message);
+      setIsClassBusy(false);
+      return;
+    }
+
+    const remoteClasses = sortClasses(
+      optimisticClasses.map((item) => (item.id === newClass.id ? response.data : item))
+    );
+    setClasses(remoteClasses);
+    updateSelection(remoteClasses, notes, { selectedClassId: response.data.id });
+    setIsClassBusy(false);
   }
 
-  function renameClass() {
+  async function renameClass() {
     if (!selectedClass) return;
 
-    const newName = prompt("Rename class:", selectedClass.name);
-    if (!newName || !newName.trim()) return;
+    const nextName = prompt("Rename class:", selectedClass.name);
+    if (!nextName || !nextName.trim()) return;
 
-    updateApp((prev) => {
-      const next = structuredClone(prev);
-      const cls = next.classes.find((c) => c.id === next.selectedClassId);
-      if (cls) cls.name = newName.trim();
-      return next;
-    });
+    setIsClassBusy(true);
+    const previousClasses = classes;
+    const updatedClass = {
+      ...selectedClass,
+      name: nextName.trim(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const optimisticClasses = sortClasses(
+      classes.map((item) => (item.id === selectedClass.id ? updatedClass : item))
+    );
+    setClasses(optimisticClasses);
+
+    const response = await supabase
+      .from("classes")
+      .update({ name: nextName.trim() })
+      .eq("id", selectedClass.id)
+      .select("*")
+      .single();
+
+    if (response.error) {
+      setClasses(previousClasses);
+      setLoadError(response.error.message);
+      setIsClassBusy(false);
+      return;
+    }
+
+    setClasses(
+      sortClasses(optimisticClasses.map((item) => (item.id === selectedClass.id ? response.data : item)))
+    );
+    setIsClassBusy(false);
   }
 
-  function deleteClass() {
+  async function deleteClass() {
     if (!selectedClass) return;
 
     const confirmed = confirm(`Delete "${selectedClass.name}" and all its notes?`);
     if (!confirmed) return;
 
-    updateApp((prev) => {
-      const next = structuredClone(prev);
-      next.classes = next.classes.filter((c) => c.id !== next.selectedClassId);
-      return next;
-    });
+    setIsClassBusy(true);
+    const previousClasses = classes;
+    const previousNotes = notes;
+
+    const nextClasses = classes.filter((item) => item.id !== selectedClass.id);
+    const nextNotes = notes.filter((item) => item.class_id !== selectedClass.id);
+    setClasses(nextClasses);
+    setNotes(nextNotes);
+    updateSelection(nextClasses, nextNotes);
+
+    const response = await supabase.from("classes").delete().eq("id", selectedClass.id);
+
+    if (response.error) {
+      setClasses(previousClasses);
+      setNotes(previousNotes);
+      updateSelection(previousClasses, previousNotes, {
+        selectedClassId: selectedClass.id,
+      });
+      setLoadError(response.error.message);
+      setIsClassBusy(false);
+      return;
+    }
+
+    setIsClassBusy(false);
   }
 
-  function addNote() {
+  async function addNote() {
     if (!selectedClass) return;
 
-    const timestamp = Date.now();
+    setIsNoteBusy(true);
+    const now = new Date().toISOString();
+    const newNote = {
+      id: createId(),
+      class_id: selectedClass.id,
+      title: "New Note",
+      content: "",
+      drawing: null,
+      sort_order: getSortOrder(),
+      created_at: now,
+      updated_at: now,
+    };
 
-    updateApp((prev) => {
-      const next = structuredClone(prev);
-      const cls = next.classes.find((c) => c.id === next.selectedClassId);
-      if (!cls) return next;
+    const optimisticNotes = sortNotes([newNote, ...notes]);
+    setNotes(optimisticNotes);
+    setSelectedNoteId(newNote.id);
+    markNoteSaving(newNote.id);
 
-      const newNote = {
-        id: generateId(),
-        title: "New Note",
-        content: "",
-        drawing: null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
+    const response = await supabase.from("notes").insert(newNote).select("*").single();
 
-      cls.notes.unshift(newNote);
-      next.selectedNoteId = newNote.id;
-      return next;
-    });
+    if (response.error) {
+      setNotes(notes);
+      setSelectedNoteId(selectedNoteId);
+      setLoadError(response.error.message);
+      setIsNoteBusy(false);
+      return;
+    }
+
+    const remoteNotes = sortNotes(
+      optimisticNotes.map((item) => (item.id === newNote.id ? response.data : item))
+    );
+    setNotes(remoteNotes);
+    setSelectedNoteId(response.data.id);
+    markNoteSaved(response.data.id, response.data.updated_at);
+    setIsNoteBusy(false);
   }
 
-  function renameNote() {
+  async function renameNote() {
     if (!selectedNote) return;
 
-    const newTitle = prompt("Rename note:", selectedNote.title || "Untitled Note");
-    if (!newTitle || !newTitle.trim()) return;
+    const nextTitle = prompt("Rename note:", selectedNote.title || "Untitled Note");
+    if (!nextTitle || !nextTitle.trim()) return;
 
-    updateApp((prev) => {
-      const next = structuredClone(prev);
-      const cls = next.classes.find((c) => c.id === next.selectedClassId);
-      const note = cls?.notes.find((n) => n.id === next.selectedNoteId);
-      if (note) {
-        note.title = newTitle.trim();
-        note.updatedAt = Date.now();
-      }
-      return next;
+    updateNoteLocally(selectedNote.id, {
+      title: nextTitle.trim(),
+      updated_at: new Date().toISOString(),
+    });
+    await persistNotePatch(selectedNote.id, {
+      title: nextTitle.trim(),
     });
   }
 
-  function deleteNote() {
-    if (!selectedClass || !selectedNote) return;
+  async function deleteNote() {
+    if (!selectedNote) return;
 
-    const confirmed = confirm(
-      `Delete "${selectedNote.title || "Untitled Note"}"?`
-    );
+    const confirmed = confirm(`Delete "${selectedNote.title || "Untitled Note"}"?`);
     if (!confirmed) return;
 
-    updateApp((prev) => {
-      const next = structuredClone(prev);
-      const cls = next.classes.find((c) => c.id === next.selectedClassId);
-      if (!cls) return next;
-
-      cls.notes = cls.notes.filter((n) => n.id !== next.selectedNoteId);
-      return next;
+    setIsNoteBusy(true);
+    const previousNotes = notes;
+    const nextNotes = notes.filter((item) => item.id !== selectedNote.id);
+    setNotes(nextNotes);
+    updateSelection(classes, nextNotes, {
+      selectedClassId,
     });
+
+    const response = await supabase.from("notes").delete().eq("id", selectedNote.id);
+
+    if (response.error) {
+      setNotes(previousNotes);
+      updateSelection(classes, previousNotes, {
+        selectedClassId,
+        selectedNoteId: selectedNote.id,
+      });
+      setLoadError(response.error.message);
+      setIsNoteBusy(false);
+      return;
+    }
+
+    setIsNoteBusy(false);
   }
 
   function updateNoteTitle(value) {
-    updateApp((prev) => {
-      const next = structuredClone(prev);
-      const cls = next.classes.find((c) => c.id === next.selectedClassId);
-      const note = cls?.notes.find((n) => n.id === next.selectedNoteId);
-      if (note) {
-        note.title = value.trim() || "Untitled Note";
-        note.updatedAt = Date.now();
-      }
-      return next;
-    }, "Saved title");
+    if (!selectedNote) return;
+
+    updateNoteLocally(selectedNote.id, {
+      title: value,
+      updated_at: new Date().toISOString(),
+    });
+    queueTextSave(selectedNote.id, value, selectedNote.content || "");
   }
 
   function updateNoteContent(value) {
-    updateApp((prev) => {
-      const next = structuredClone(prev);
-      const cls = next.classes.find((c) => c.id === next.selectedClassId);
-      const note = cls?.notes.find((n) => n.id === next.selectedNoteId);
-      if (note) {
-        note.content = value;
-        note.updatedAt = Date.now();
-      }
-      return next;
-    }, "Saved text");
+    if (!selectedNote) return;
+
+    updateNoteLocally(selectedNote.id, {
+      content: value,
+      updated_at: new Date().toISOString(),
+    });
+    queueTextSave(selectedNote.id, selectedNote.title || "", value);
   }
 
-  function clearDrawing() {
+  async function clearDrawing() {
     if (!selectedNote) return;
 
     const confirmed = confirm("Clear this drawing?");
     if (!confirmed) return;
 
-    clearCanvas();
-
-    updateApp((prev) => {
-      const next = structuredClone(prev);
-      const cls = next.classes.find((c) => c.id === next.selectedClassId);
-      const note = cls?.notes.find((n) => n.id === next.selectedNoteId);
-      if (note) {
-        note.drawing = null;
-        note.updatedAt = Date.now();
-      }
-      return next;
-    }, "Drawing cleared");
+    updateNoteLocally(selectedNote.id, {
+      drawing: null,
+      updated_at: new Date().toISOString(),
+    });
+    window.clearTimeout(drawingSaveTimeoutRef.current);
+    await persistNotePatch(selectedNote.id, { drawing: null });
   }
 
-  function toggleTheme() {
-    updateApp((prev) => ({
-      ...prev,
-      darkMode: !prev.darkMode,
-    }));
+  function saveDrawing(nextDrawing) {
+    if (!selectedNote) return;
+
+    updateNoteLocally(selectedNote.id, {
+      drawing: nextDrawing,
+      updated_at: new Date().toISOString(),
+    });
+    queueDrawingSave(selectedNote.id, nextDrawing);
+  }
+
+  function selectClass(classId) {
+    const nextNotes = notesByClassId.get(classId) || [];
+
+    startTransition(() => {
+      setSelectedClassId(classId);
+      setSelectedNoteId(nextNotes[0]?.id || null);
+    });
+  }
+
+  function selectNote(noteId) {
+    startTransition(() => {
+      setSelectedNoteId(noteId);
+    });
   }
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Student Notes</p>
-          <h1>School Notes</h1>
-        </div>
-        <button onClick={toggleTheme} className="ghost-btn">
-          {appData.darkMode ? "Light Mode" : "Dark Mode"}
-        </button>
-      </header>
-
-      <main className="mobile-layout">
-        <section className="panel sidebar-panel">
-          <div className="panel-header">
-            <h2>Classes</h2>
-            <button onClick={addClass} className="primary-btn">+ Class</button>
+    <>
+      <div className="app-shell">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Student Notes</p>
+            <h1>School Notes</h1>
+            <p className="hero-copy">
+              Your classes, notes, and sketches now stay synced across devices with a smoother edit flow.
+            </p>
           </div>
 
-          <ul className="card-list">
-            {appData.classes.length === 0 ? (
-              <li className="card-item">
-                <div className="card-item-title">No classes yet</div>
-                <div className="card-item-meta">Tap + Class to get started</div>
-              </li>
-            ) : (
-              appData.classes.map((cls) => (
-                <li
-                  key={cls.id}
-                  className={`card-item ${cls.id === appData.selectedClassId ? "active" : ""}`}
-                  onClick={() =>
-                    setAppData((prev) =>
-                      ensureValidSelection({
-                        ...prev,
-                        selectedClassId: cls.id,
-                        selectedNoteId: cls.notes[0]?.id || null,
-                      })
-                    )
-                  }
-                >
-                  <div className="card-item-title">{cls.name}</div>
-                  <div className="card-item-meta">
-                    {cls.notes.length} note{cls.notes.length === 1 ? "" : "s"}
-                  </div>
-                </li>
-              ))
-            )}
-          </ul>
-        </section>
-
-        <section className="panel notes-panel">
-          <div className="panel-header">
-            <div>
-              <h2>{selectedClass ? selectedClass.name : "Select a class"}</h2>
-              <p className="subtext">
-                {selectedClass
-                  ? `${selectedClass.notes.length} note${selectedClass.notes.length === 1 ? "" : "s"}`
-                  : "Choose a class to view notes"}
-              </p>
+          <div className="topbar-actions">
+            <div className={`status-pill ${loadError ? "error" : ""}`}>
+              {loadError
+                ? loadError
+                : isLoading
+                  ? "Connecting to Supabase..."
+                  : isRefreshing
+                    ? "Refreshing..."
+                    : "Sync online"}
             </div>
-
-            <div className="actions-row">
-              <button
-                onClick={renameClass}
-                className="ghost-btn"
-                disabled={!selectedClass}
-              >
-                Rename
-              </button>
-              <button
-                onClick={deleteClass}
-                className="danger-btn"
-                disabled={!selectedClass}
-              >
-                Delete
-              </button>
-              <button
-                onClick={addNote}
-                className="primary-btn"
-                disabled={!selectedClass}
-              >
-                + Note
-              </button>
-            </div>
+            <button onClick={() => setDarkMode((value) => !value)} className="ghost-btn">
+              {darkMode ? "Light Mode" : "Dark Mode"}
+            </button>
           </div>
+        </header>
 
-          <div className="notes-grid">
-            <aside className="notes-list-card">
-              <div className="notes-list-header">
-                <h3>Notes</h3>
+        <main className="mobile-layout">
+          <section className="panel sidebar-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Classes</h2>
+                <p className="subtext">Organize every subject in one place</p>
               </div>
+              <button
+                onClick={addClass}
+                className="primary-btn"
+                disabled={!isSupabaseConfigured || isClassBusy || isLoading}
+              >
+                + Class
+              </button>
+            </div>
 
-              <ul className="card-list">
-                {!selectedClass ? (
-                  <li className="card-item">
-                    <div className="card-item-title">No class selected</div>
-                    <div className="card-item-meta">Pick a class first</div>
-                  </li>
-                ) : selectedClass.notes.length === 0 ? (
-                  <li className="card-item">
-                    <div className="card-item-title">No notes yet</div>
-                    <div className="card-item-meta">Tap + Note to make one</div>
-                  </li>
-                ) : (
-                  selectedClass.notes.map((note) => (
+            <ul className="card-list">
+              {isLoading ? (
+                <>
+                  <li className="card-item skeleton-card" />
+                  <li className="card-item skeleton-card" />
+                  <li className="card-item skeleton-card" />
+                </>
+              ) : classes.length === 0 ? (
+                <li className="card-item empty-card">
+                  <div className="card-item-title">No classes yet</div>
+                  <div className="card-item-meta">Create your first class to start syncing notes.</div>
+                </li>
+              ) : (
+                classes.map((item) => {
+                  const noteCount = notesByClassId.get(item.id)?.length || 0;
+
+                  return (
                     <li
-                      key={note.id}
-                      className={`card-item ${note.id === appData.selectedNoteId ? "active" : ""}`}
-                      onClick={() =>
-                        setAppData((prev) => ({
-                          ...prev,
-                          selectedNoteId: note.id,
-                        }))
-                      }
+                      key={item.id}
+                      className={`card-item ${item.id === selectedClassId ? "active" : ""}`}
+                      onClick={() => selectClass(item.id)}
                     >
-                      <div className="card-item-title">
-                        {note.title || "Untitled Note"}
-                      </div>
+                      <div className="card-item-title">{item.name}</div>
                       <div className="card-item-meta">
-                        Updated {formatDate(note.updatedAt)}
+                        {noteCount} note{noteCount === 1 ? "" : "s"}
                       </div>
                     </li>
-                  ))
-                )}
-              </ul>
-            </aside>
+                  );
+                })
+              )}
+            </ul>
+          </section>
 
-            <section className="editor-card">
-              <div className="editor-toolbar">
-                <div className="editor-toolbar-left">
-                  <button
-                    onClick={renameNote}
-                    className="ghost-btn"
-                    disabled={!selectedNote}
-                  >
-                    Rename Note
-                  </button>
-                  <button
-                    onClick={deleteNote}
-                    className="danger-btn"
-                    disabled={!selectedNote}
-                  >
-                    Delete Note
-                  </button>
-                </div>
+          <section className="panel notes-panel">
+            <div className="panel-header">
+              <div>
+                <h2>{selectedClass ? selectedClass.name : "Select a class"}</h2>
+                <p className="subtext">
+                  {selectedClass
+                    ? `${selectedClassNotes.length} note${selectedClassNotes.length === 1 ? "" : "s"} ready`
+                    : "Choose a class to view and edit notes"}
+                </p>
+              </div>
 
+              <div className="actions-row">
                 <button
-                  onClick={clearDrawing}
+                  onClick={renameClass}
                   className="ghost-btn"
-                  disabled={!selectedNote}
+                  disabled={!selectedClass || isClassBusy || isLoading}
                 >
-                  Clear Drawing
+                  Rename
+                </button>
+                <button
+                  onClick={deleteClass}
+                  className="danger-btn"
+                  disabled={!selectedClass || isClassBusy || isLoading}
+                >
+                  Delete
+                </button>
+                <button
+                  onClick={addNote}
+                  className="primary-btn"
+                  disabled={!selectedClass || isNoteBusy || isLoading}
+                >
+                  + Note
                 </button>
               </div>
+            </div>
 
-              <input
-                type="text"
-                placeholder="Note title"
-                disabled={!selectedNote}
-                value={selectedNote?.title || ""}
-                onChange={(e) => updateNoteTitle(e.target.value)}
-              />
-
-              <textarea
-                id="note-content"
-                placeholder="Start typing your notes here..."
-                disabled={!selectedNote}
-                value={selectedNote?.content || ""}
-                onChange={(e) => updateNoteContent(e.target.value)}
-              />
-
-              <section className="drawing-section">
-                <div className="drawing-section-header">
-                  <h3>Drawing</h3>
-                  <span className="subtext">Draw in the same note</span>
+            <div className="notes-grid">
+              <aside className="notes-list-card">
+                <div className="notes-list-header">
+                  <div>
+                    <h3>Notes</h3>
+                    <p className="subtext">Fast-switch between text and drawing</p>
+                  </div>
                 </div>
 
-                <div className="canvas-wrap">
-                  <canvas
-                    ref={canvasRef}
-                    id="drawing-canvas"
-                    onPointerDown={handlePointerDown}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onPointerLeave={handlePointerUp}
-                    onPointerCancel={handlePointerUp}
-                  />
+                <ul className="card-list">
+                  {!selectedClass ? (
+                    <li className="card-item empty-card">
+                      <div className="card-item-title">No class selected</div>
+                      <div className="card-item-meta">Pick a class to see its notes.</div>
+                    </li>
+                  ) : selectedClassNotes.length === 0 ? (
+                    <li className="card-item empty-card">
+                      <div className="card-item-title">No notes yet</div>
+                      <div className="card-item-meta">Tap + Note to start writing.</div>
+                    </li>
+                  ) : (
+                    selectedClassNotes.map((note) => (
+                      <li
+                        key={note.id}
+                        className={`card-item ${note.id === selectedNoteId ? "active" : ""}`}
+                        onClick={() => selectNote(note.id)}
+                      >
+                        <div className="card-item-title">{note.title || "Untitled Note"}</div>
+                        <div className="card-item-meta">Updated {formatTimestamp(note.updated_at)}</div>
+                      </li>
+                    ))
+                  )}
+                </ul>
+              </aside>
+
+              <section className="editor-card">
+                <div className="editor-toolbar">
+                  <div className="editor-toolbar-left">
+                    <button
+                      onClick={renameNote}
+                      className="ghost-btn"
+                      disabled={!selectedNote || isLoading}
+                    >
+                      Rename Note
+                    </button>
+                    <button
+                      onClick={deleteNote}
+                      className="danger-btn"
+                      disabled={!selectedNote || isNoteBusy || isLoading}
+                    >
+                      Delete Note
+                    </button>
+                  </div>
+
+                  <div className="editor-toolbar-right">
+                    <div className={`save-indicator ${selectedNoteSaveState.state}`}>
+                      {selectedNote ? getSaveLabel(selectedNoteSaveState) : "Select a note"}
+                    </div>
+                    <button
+                      onClick={() => setDrawingOpen(true)}
+                      className="primary-btn"
+                      disabled={!selectedNote || isLoading}
+                    >
+                      Draw
+                    </button>
+                    <button
+                      onClick={clearDrawing}
+                      className="ghost-btn"
+                      disabled={!selectedNote || isLoading}
+                    >
+                      Clear Drawing
+                    </button>
+                  </div>
+                </div>
+
+                <input
+                  type="text"
+                  placeholder="Note title"
+                  disabled={!selectedNote || isLoading}
+                  value={selectedNote?.title || ""}
+                  onChange={(event) => updateNoteTitle(event.target.value)}
+                />
+
+                <textarea
+                  id="note-content"
+                  placeholder="Start typing your notes here..."
+                  disabled={!selectedNote || isLoading}
+                  value={selectedNote?.content || ""}
+                  onChange={(event) => updateNoteContent(event.target.value)}
+                />
+
+                <section className="drawing-section">
+                  <div className="drawing-section-header">
+                    <div>
+                      <h3>Drawing</h3>
+                      <p className="subtext">Open full-screen for pencil-friendly sketching</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => setDrawingOpen(true)}
+                      disabled={!selectedNote || isLoading}
+                    >
+                      Open Studio
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    className={`drawing-preview ${selectedNote?.drawing ? "has-drawing" : ""}`}
+                    onClick={() => setDrawingOpen(true)}
+                    disabled={!selectedNote || isLoading}
+                  >
+                    {selectedNote?.drawing ? (
+                      <img src={selectedNote.drawing} alt="Drawing preview" />
+                    ) : (
+                      <div className="drawing-placeholder">
+                        <strong>No sketch yet</strong>
+                        <span>Tap to launch the full-screen canvas.</span>
+                      </div>
+                    )}
+                  </button>
+                </section>
+
+                <div className="editor-footer">
+                  <span>
+                    {selectedNote
+                      ? `${getSaveLabel(selectedNoteSaveState)}${selectedNoteSaveState.lastSavedAt ? ` • ${formatTimestamp(selectedNoteSaveState.lastSavedAt)}` : ""}`
+                      : "Select a note to begin editing"}
+                  </span>
+                  <span>{selectedClass ? `${selectedClassNotes.length} note${selectedClassNotes.length === 1 ? "" : "s"}` : ""}</span>
                 </div>
               </section>
+            </div>
+          </section>
+        </main>
+      </div>
 
-              <div className="editor-footer">
-                <span>{saveStatus}</span>
-              </div>
-            </section>
-          </div>
-        </section>
-      </main>
-    </div>
+      <FullscreenDrawingModal
+        open={drawingOpen}
+        noteTitle={selectedNote?.title}
+        initialImage={selectedNote?.drawing || null}
+        saveState={selectedNote ? getSaveLabel(selectedNoteSaveState) : "Saved"}
+        onClose={() => setDrawingOpen(false)}
+        onChange={saveDrawing}
+      />
+    </>
   );
 }
