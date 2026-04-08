@@ -1,5 +1,6 @@
 import {
   startTransition,
+  useDeferredValue,
   useEffect,
   useEffectEvent,
   useMemo,
@@ -28,6 +29,28 @@ function formatTimestamp(value) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function formatRelativeTime(value) {
+  if (!value) return "just now";
+
+  const diff = Date.now() - new Date(value).getTime();
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+
+  if (diff < hour) {
+    const minutes = Math.max(1, Math.round(diff / minute));
+    return `${minutes}m ago`;
+  }
+
+  if (diff < day) {
+    const hours = Math.round(diff / hour);
+    return `${hours}h ago`;
+  }
+
+  const days = Math.round(diff / day);
+  return `${days}d ago`;
 }
 
 function getSortOrder() {
@@ -100,6 +123,32 @@ function getSaveLabel(saveState) {
   })}`;
 }
 
+function getNoteWordCount(content) {
+  return content.trim() ? content.trim().split(/\s+/).length : 0;
+}
+
+function getNoteSnippet(note) {
+  const source = (note.content || "").trim();
+  if (!source) {
+    return note.drawing ? "Sketch saved in this note." : "No content yet. Start typing or sketching.";
+  }
+
+  return source.length > 100 ? `${source.slice(0, 100)}...` : source;
+}
+
+function getClassAccent(name) {
+  const seed = [...name].reduce((total, char) => total + char.charCodeAt(0), 0);
+  const hue = seed % 360;
+  return `hsl(${hue} 82% 56%)`;
+}
+
+function noteMatchesQuery(note, className, query) {
+  if (!query) return true;
+
+  const haystack = `${className} ${note.title || ""} ${note.content || ""}`.toLowerCase();
+  return haystack.includes(query);
+}
+
 export default function App() {
   const [classes, setClasses] = useState([]);
   const [notes, setNotes] = useState([]);
@@ -115,9 +164,12 @@ export default function App() {
   const [isNoteBusy, setIsNoteBusy] = useState(false);
   const [drawingOpen, setDrawingOpen] = useState(false);
   const [noteSaveStates, setNoteSaveStates] = useState({});
+  const [searchQuery, setSearchQuery] = useState("");
+  const [noteFilter, setNoteFilter] = useState("all");
 
   const textSaveTimeoutRef = useRef(null);
   const drawingSaveTimeoutRef = useRef(null);
+  const deferredSearchQuery = useDeferredValue(searchQuery.trim().toLowerCase());
 
   const classesById = useMemo(
     () => new Map(classes.map((item) => [item.id, item])),
@@ -143,7 +195,10 @@ export default function App() {
   }, [notes]);
 
   const selectedClass = selectedClassId ? classesById.get(selectedClassId) || null : null;
-  const selectedClassNotes = selectedClassId ? notesByClassId.get(selectedClassId) || [] : [];
+  const selectedClassNotes = useMemo(
+    () => (selectedClassId ? notesByClassId.get(selectedClassId) || [] : []),
+    [notesByClassId, selectedClassId]
+  );
   const selectedNote = selectedNoteId
     ? notes.find((item) => item.id === selectedNoteId) || null
     : null;
@@ -151,6 +206,52 @@ export default function App() {
   const selectedNoteSaveState = selectedNoteId
     ? noteSaveStates[selectedNoteId] || EMPTY_SAVE_STATE
     : EMPTY_SAVE_STATE;
+
+  const filteredClasses = useMemo(() => {
+    if (!deferredSearchQuery) return classes;
+
+    return classes.filter((item) => {
+      const classNotes = notesByClassId.get(item.id) || [];
+      return (
+        item.name.toLowerCase().includes(deferredSearchQuery) ||
+        classNotes.some((note) => noteMatchesQuery(note, item.name, deferredSearchQuery))
+      );
+    });
+  }, [classes, deferredSearchQuery, notesByClassId]);
+
+  const filteredSelectedClassNotes = useMemo(() => {
+    return selectedClassNotes.filter((note) => {
+      const matchesQuery = noteMatchesQuery(note, selectedClass?.name || "", deferredSearchQuery);
+      const matchesFilter =
+        noteFilter === "all" ||
+        (noteFilter === "drawing" && Boolean(note.drawing)) ||
+        (noteFilter === "writing" && getNoteWordCount(note.content || "") > 0);
+
+      return matchesQuery && matchesFilter;
+    });
+  }, [deferredSearchQuery, noteFilter, selectedClass?.name, selectedClassNotes]);
+
+  const recentNotes = useMemo(() => {
+    return sortNotes(notes)
+      .filter((note) =>
+        noteMatchesQuery(note, classesById.get(note.class_id)?.name || "", deferredSearchQuery)
+      )
+      .slice(0, 5);
+  }, [classesById, deferredSearchQuery, notes]);
+
+  const totalWords = useMemo(
+    () => notes.reduce((total, note) => total + getNoteWordCount(note.content || ""), 0),
+    [notes]
+  );
+
+  const totalDrawings = useMemo(
+    () => notes.filter((note) => Boolean(note.drawing)).length,
+    [notes]
+  );
+
+  const selectedNoteWordCount = getNoteWordCount(selectedNote?.content || "");
+  const selectedNoteSnippet = selectedNote ? getNoteSnippet(selectedNote) : "";
+  const selectedClassAccent = getClassAccent(selectedClass?.name || "School Notes");
 
   const loadData = useEffectEvent(async (options = {}) => {
     const { silent = false } = options;
@@ -591,15 +692,23 @@ export default function App() {
     });
   }
 
+  function openRecent(note) {
+    startTransition(() => {
+      setSelectedClassId(note.class_id);
+      setSelectedNoteId(note.id);
+    });
+  }
+
   return (
     <>
       <div className="app-shell">
         <header className="topbar">
-          <div>
+          <div className="topbar-copy">
             <p className="eyebrow">Student Notes</p>
             <h1>School Notes</h1>
             <p className="hero-copy">
-              Your classes, notes, and sketches now stay synced across devices with a smoother edit flow.
+              Inspired by the clarity of modern note apps: faster search, stronger context,
+              better recent-note recall, and a workspace that stays calm while you study.
             </p>
           </div>
 
@@ -613,18 +722,57 @@ export default function App() {
                     ? "Refreshing..."
                     : "Sync online"}
             </div>
-            <button onClick={() => setDarkMode((value) => !value)} className="ghost-btn">
+            <button
+              onClick={() => setDarkMode((value) => !value)}
+              className="ghost-btn"
+            >
               {darkMode ? "Light Mode" : "Dark Mode"}
             </button>
           </div>
         </header>
 
+        <section className="dashboard-strip">
+          <article className="dashboard-card hero-dashboard">
+            <span className="dashboard-label">Workspace</span>
+            <strong>{classes.length || 0} classes connected</strong>
+            <p>
+              {notes.length || 0} notes synced across your devices with text and drawing autosave.
+            </p>
+          </article>
+          <article className="dashboard-card">
+            <span className="dashboard-label">Written</span>
+            <strong>{totalWords.toLocaleString()} words</strong>
+            <p>Lecture notes, review sheets, and quick capture drafts all in one place.</p>
+          </article>
+          <article className="dashboard-card">
+            <span className="dashboard-label">Sketches</span>
+            <strong>{totalDrawings} drawing{totalDrawings === 1 ? "" : "s"}</strong>
+            <p>Handwritten diagrams stay attached to the note they belong to.</p>
+          </article>
+        </section>
+
         <main className="mobile-layout">
           <section className="panel sidebar-panel">
+            <div className="search-panel">
+              <label htmlFor="library-search" className="search-label">
+                Search across classes and notes
+              </label>
+              <div className="search-input-wrap">
+                <span className="search-icon">/</span>
+                <input
+                  id="library-search"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search titles, content, or classes"
+                />
+              </div>
+            </div>
+
             <div className="panel-header">
               <div>
                 <h2>Classes</h2>
-                <p className="subtext">Organize every subject in one place</p>
+                <p className="subtext">Organize every subject with a cleaner library view</p>
               </div>
               <button
                 onClick={addClass}
@@ -635,6 +783,16 @@ export default function App() {
               </button>
             </div>
 
+            <div className="focus-card" style={{ "--focus-accent": selectedClassAccent }}>
+              <span className="dashboard-label">Focus</span>
+              <strong>{selectedClass?.name || "Choose a class"}</strong>
+              <p>
+                {selectedClass
+                  ? `${selectedClassNotes.length} notes, ${selectedClassNotes.filter((note) => note.drawing).length} with sketches`
+                  : "Select a class to view notes, recents, and editor details."}
+              </p>
+            </div>
+
             <ul className="card-list">
               {isLoading ? (
                 <>
@@ -642,24 +800,37 @@ export default function App() {
                   <li className="card-item skeleton-card" />
                   <li className="card-item skeleton-card" />
                 </>
-              ) : classes.length === 0 ? (
+              ) : filteredClasses.length === 0 ? (
                 <li className="card-item empty-card">
-                  <div className="card-item-title">No classes yet</div>
-                  <div className="card-item-meta">Create your first class to start syncing notes.</div>
+                  <div className="card-item-title">
+                    {searchQuery ? "No classes match" : "No classes yet"}
+                  </div>
+                  <div className="card-item-meta">
+                    {searchQuery
+                      ? "Try another search term or create a new class."
+                      : "Create your first class to start syncing notes."}
+                  </div>
                 </li>
               ) : (
-                classes.map((item) => {
+                filteredClasses.map((item) => {
                   const noteCount = notesByClassId.get(item.id)?.length || 0;
+                  const drawingCount =
+                    notesByClassId.get(item.id)?.filter((note) => Boolean(note.drawing)).length || 0;
 
                   return (
                     <li
                       key={item.id}
-                      className={`card-item ${item.id === selectedClassId ? "active" : ""}`}
+                      className={`card-item class-card ${item.id === selectedClassId ? "active" : ""}`}
+                      style={{ "--class-accent": getClassAccent(item.name) }}
                       onClick={() => selectClass(item.id)}
                     >
-                      <div className="card-item-title">{item.name}</div>
-                      <div className="card-item-meta">
-                        {noteCount} note{noteCount === 1 ? "" : "s"}
+                      <div className="class-card-top">
+                        <span className="class-dot" />
+                        <div className="card-item-title">{item.name}</div>
+                      </div>
+                      <div className="class-stats">
+                        <span>{noteCount} note{noteCount === 1 ? "" : "s"}</span>
+                        <span>{drawingCount} sketch{drawingCount === 1 ? "" : "es"}</span>
                       </div>
                     </li>
                   );
@@ -674,7 +845,7 @@ export default function App() {
                 <h2>{selectedClass ? selectedClass.name : "Select a class"}</h2>
                 <p className="subtext">
                   {selectedClass
-                    ? `${selectedClassNotes.length} note${selectedClassNotes.length === 1 ? "" : "s"} ready`
+                    ? `${filteredSelectedClassNotes.length} visible note${filteredSelectedClassNotes.length === 1 ? "" : "s"} in this class`
                     : "Choose a class to view and edit notes"}
                 </p>
               </div>
@@ -704,13 +875,65 @@ export default function App() {
               </div>
             </div>
 
+            <section className="recent-strip">
+              <div className="recent-strip-header">
+                <div>
+                  <h3>Recently active</h3>
+                  <p className="subtext">Modern note apps surface what you touched last. Ours does too.</p>
+                </div>
+              </div>
+
+              <div className="recent-note-row">
+                {recentNotes.length === 0 ? (
+                  <div className="recent-note-card empty-recent-card">
+                    Recent notes will appear here once you start editing.
+                  </div>
+                ) : (
+                  recentNotes.map((note) => {
+                    const className = classesById.get(note.class_id)?.name || "Unknown class";
+
+                    return (
+                      <button
+                        key={note.id}
+                        type="button"
+                        className={`recent-note-card ${note.id === selectedNoteId ? "active" : ""}`}
+                        onClick={() => openRecent(note)}
+                      >
+                        <span className="recent-class-name">{className}</span>
+                        <strong>{note.title || "Untitled Note"}</strong>
+                        <p>{getNoteSnippet(note)}</p>
+                        <span className="recent-meta">{formatRelativeTime(note.updated_at)}</span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+
             <div className="notes-grid">
               <aside className="notes-list-card">
                 <div className="notes-list-header">
                   <div>
                     <h3>Notes</h3>
-                    <p className="subtext">Fast-switch between text and drawing</p>
+                    <p className="subtext">Fast-switch between text-heavy notes and sketches</p>
                   </div>
+                </div>
+
+                <div className="filter-row">
+                  {[
+                    ["all", "All"],
+                    ["writing", "Writing"],
+                    ["drawing", "Drawing"],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`filter-chip ${noteFilter === value ? "active" : ""}`}
+                      onClick={() => setNoteFilter(value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
 
                 <ul className="card-list">
@@ -719,20 +942,33 @@ export default function App() {
                       <div className="card-item-title">No class selected</div>
                       <div className="card-item-meta">Pick a class to see its notes.</div>
                     </li>
-                  ) : selectedClassNotes.length === 0 ? (
+                  ) : filteredSelectedClassNotes.length === 0 ? (
                     <li className="card-item empty-card">
-                      <div className="card-item-title">No notes yet</div>
-                      <div className="card-item-meta">Tap + Note to start writing.</div>
+                      <div className="card-item-title">
+                        {searchQuery || noteFilter !== "all" ? "No notes match" : "No notes yet"}
+                      </div>
+                      <div className="card-item-meta">
+                        {searchQuery || noteFilter !== "all"
+                          ? "Adjust your search or filter to widen the results."
+                          : "Tap + Note to start writing."}
+                      </div>
                     </li>
                   ) : (
-                    selectedClassNotes.map((note) => (
+                    filteredSelectedClassNotes.map((note) => (
                       <li
                         key={note.id}
-                        className={`card-item ${note.id === selectedNoteId ? "active" : ""}`}
+                        className={`card-item note-card ${note.id === selectedNoteId ? "active" : ""}`}
                         onClick={() => selectNote(note.id)}
                       >
-                        <div className="card-item-title">{note.title || "Untitled Note"}</div>
-                        <div className="card-item-meta">Updated {formatTimestamp(note.updated_at)}</div>
+                        <div className="note-card-header">
+                          <div className="card-item-title">{note.title || "Untitled Note"}</div>
+                          {note.drawing ? <span className="note-badge">Sketch</span> : null}
+                        </div>
+                        <p className="note-snippet">{getNoteSnippet(note)}</p>
+                        <div className="note-meta-row">
+                          <span>{getNoteWordCount(note.content || "")} words</span>
+                          <span>{formatRelativeTime(note.updated_at)}</span>
+                        </div>
                       </li>
                     ))
                   )}
@@ -779,6 +1015,23 @@ export default function App() {
                   </div>
                 </div>
 
+                {selectedNote ? (
+                  <div className="editor-hero" style={{ "--editor-accent": selectedClassAccent }}>
+                    <div className="editor-hero-copy">
+                      <span className="dashboard-label">{selectedClass?.name || "Class"}</span>
+                      <strong>{selectedNote.title || "Untitled Note"}</strong>
+                      <p>{selectedNoteSnippet}</p>
+                    </div>
+                    <div className="editor-meta-pills">
+                      <span className="meta-pill">{selectedNoteWordCount} words</span>
+                      <span className="meta-pill">
+                        {selectedNote.drawing ? "Sketch attached" : "No sketch yet"}
+                      </span>
+                      <span className="meta-pill">Updated {formatTimestamp(selectedNote.updated_at)}</span>
+                    </div>
+                  </div>
+                ) : null}
+
                 <input
                   type="text"
                   placeholder="Note title"
@@ -799,7 +1052,7 @@ export default function App() {
                   <div className="drawing-section-header">
                     <div>
                       <h3>Drawing</h3>
-                      <p className="subtext">Open full-screen for pencil-friendly sketching</p>
+                      <p className="subtext">Open the full-screen studio for diagrams, mind maps, and quick annotations</p>
                     </div>
                     <button
                       type="button"
@@ -822,7 +1075,7 @@ export default function App() {
                     ) : (
                       <div className="drawing-placeholder">
                         <strong>No sketch yet</strong>
-                        <span>Tap to launch the full-screen canvas.</span>
+                        <span>Tap to launch the full-screen canvas and capture diagrams without leaving the note.</span>
                       </div>
                     )}
                   </button>
@@ -831,10 +1084,14 @@ export default function App() {
                 <div className="editor-footer">
                   <span>
                     {selectedNote
-                      ? `${getSaveLabel(selectedNoteSaveState)}${selectedNoteSaveState.lastSavedAt ? ` • ${formatTimestamp(selectedNoteSaveState.lastSavedAt)}` : ""}`
+                      ? `${getSaveLabel(selectedNoteSaveState)}${selectedNoteSaveState.lastSavedAt ? ` | ${formatTimestamp(selectedNoteSaveState.lastSavedAt)}` : ""}`
                       : "Select a note to begin editing"}
                   </span>
-                  <span>{selectedClass ? `${selectedClassNotes.length} note${selectedClassNotes.length === 1 ? "" : "s"}` : ""}</span>
+                  <span>
+                    {selectedClass
+                      ? `${selectedClassNotes.length} total note${selectedClassNotes.length === 1 ? "" : "s"}`
+                      : ""}
+                  </span>
                 </div>
               </section>
             </div>

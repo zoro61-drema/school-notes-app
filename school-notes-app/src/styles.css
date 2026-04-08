@@ -133,6 +133,10 @@ textarea:focus {
   margin-bottom: 18px;
 }
 
+.topbar-copy {
+  max-width: 56rem;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   font-size: 0.78rem;
@@ -163,13 +167,74 @@ textarea:focus {
   justify-content: flex-end;
 }
 
+.dashboard-strip {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.dashboard-card,
+.focus-card {
+  position: relative;
+  overflow: hidden;
+  padding: 18px;
+  border-radius: 24px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.dashboard-card::before,
+.focus-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, rgba(22, 119, 255, 0.8), rgba(16, 185, 129, 0.6));
+}
+
+.hero-dashboard {
+  background:
+    radial-gradient(circle at top right, rgba(22, 119, 255, 0.16), transparent 35%),
+    var(--panel);
+}
+
+.dashboard-label {
+  display: inline-block;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dashboard-card strong,
+.focus-card strong {
+  display: block;
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+.dashboard-card p,
+.focus-card p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .status-pill,
 .save-indicator,
-.drawing-status-pill {
+.drawing-status-pill,
+.meta-pill,
+.note-badge {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 42px;
+  min-height: 40px;
   padding: 0 14px;
   border-radius: 999px;
   background: var(--panel-strong);
@@ -215,7 +280,7 @@ textarea:focus {
 
 .notes-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 300px) 1fr;
+  grid-template-columns: minmax(280px, 330px) 1fr;
   gap: 18px;
 }
 
@@ -233,7 +298,15 @@ textarea:focus {
 .editor-footer,
 .drawing-section-header,
 .drawing-toolbar,
-.drawing-toolbar-group {
+.drawing-toolbar-group,
+.class-card-top,
+.class-stats,
+.note-card-header,
+.note-meta-row,
+.recent-strip-header,
+.recent-note-row,
+.editor-meta-pills,
+.filter-row {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -248,7 +321,8 @@ textarea:focus {
 
 .panel-header h2,
 .notes-list-header h3,
-.drawing-section-header h3 {
+.drawing-section-header h3,
+.recent-strip-header h3 {
   margin: 0;
 }
 
@@ -256,6 +330,42 @@ textarea:focus {
   margin: 6px 0 0;
   color: var(--muted);
   line-height: 1.4;
+}
+
+.search-panel {
+  margin-bottom: 18px;
+}
+
+.search-label {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.search-input-wrap {
+  position: relative;
+}
+
+.search-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.search-input-wrap input {
+  padding-left: 42px;
+}
+
+.focus-card {
+  margin-bottom: 16px;
+}
+
+.focus-card::before {
+  background: linear-gradient(90deg, var(--focus-accent), rgba(22, 119, 255, 0.2));
 }
 
 .card-list {
@@ -326,6 +436,136 @@ textarea:focus {
   }
 }
 
+.class-card {
+  position: relative;
+}
+
+.class-card::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  bottom: 14px;
+  width: 4px;
+  border-radius: 999px;
+  background: var(--class-accent);
+}
+
+.class-card-top,
+.class-stats {
+  margin-left: 12px;
+}
+
+.class-card-top {
+  margin-bottom: 8px;
+}
+
+.class-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--class-accent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--class-accent) 18%, transparent);
+}
+
+.class-stats,
+.note-meta-row,
+.recent-meta,
+.recent-class-name,
+.note-snippet {
+  color: var(--muted);
+}
+
+.class-stats,
+.note-meta-row {
+  justify-content: space-between;
+  font-size: 0.88rem;
+}
+
+.recent-strip {
+  margin-bottom: 18px;
+}
+
+.recent-note-row {
+  overflow-x: auto;
+  align-items: stretch;
+  padding-bottom: 4px;
+}
+
+.recent-note-card {
+  min-width: 230px;
+  max-width: 260px;
+  padding: 16px;
+  border-radius: 22px;
+  border: 1px solid var(--border);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-soft);
+  text-align: left;
+  flex-shrink: 0;
+}
+
+.recent-note-card.active {
+  border-color: rgba(22, 119, 255, 0.28);
+  background: linear-gradient(180deg, var(--accent-soft), transparent), var(--panel-solid);
+}
+
+.recent-note-card p {
+  margin: 10px 0 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.recent-note-card strong {
+  display: block;
+  margin-top: 6px;
+}
+
+.empty-recent-card {
+  min-width: 100%;
+  color: var(--muted);
+}
+
+.recent-class-name {
+  display: inline-block;
+  font-size: 0.84rem;
+}
+
+.filter-row {
+  flex-wrap: wrap;
+  margin: 14px 0 16px;
+}
+
+.filter-chip {
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: var(--item);
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+
+.filter-chip.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(22, 119, 255, 0.2);
+}
+
+.note-card-header,
+.note-meta-row {
+  justify-content: space-between;
+}
+
+.note-badge,
+.meta-pill {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 0.82rem;
+}
+
+.note-snippet {
+  margin: 8px 0 12px;
+  line-height: 1.45;
+}
+
 input {
   margin-bottom: 12px;
   font-size: 1.1rem;
@@ -340,12 +580,43 @@ input {
 }
 
 .editor-toolbar-right,
-.actions-row {
+.actions-row,
+.editor-meta-pills {
   flex-wrap: wrap;
 }
 
 .editor-card {
   position: relative;
+}
+
+.editor-hero {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 18px;
+  border-radius: 24px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--editor-accent) 16%, transparent), transparent 55%),
+    var(--panel-solid);
+  border: 1px solid var(--border);
+}
+
+.editor-hero-copy strong {
+  display: block;
+  font-size: 1.4rem;
+  line-height: 1.1;
+  margin-bottom: 10px;
+}
+
+.editor-hero-copy p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.editor-meta-pills {
+  align-content: flex-start;
 }
 
 .drawing-section {
@@ -560,9 +831,16 @@ input {
   z-index: 2;
 }
 
+@media (max-width: 1280px) {
+  .dashboard-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1120px) {
   .mobile-layout,
-  .notes-grid {
+  .notes-grid,
+  .editor-hero {
     grid-template-columns: 1fr;
   }
 }
